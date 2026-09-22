@@ -52,13 +52,13 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/droidspaces
           mkdir -p patches
-          cp /tmp/droidspaces/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kABI_6_7_8.patch patches/ 2>/dev/null || true
+          cp /tmp/droidspaces/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kABI_3_4_5.patch patches/ 2>/dev/null || true
           cp /tmp/droidspaces/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch patches/ 2>/dev/null || true
 
       - name: Apply Droidspaces kABI patches
         run: |
-          if [ -f patches/001.GKI-below-6.12-fix_sysvipc_kABI_6_7_8.patch ]; then
-            patch -p1 < patches/001.GKI-below-6.12-fix_sysvipc_kABI_6_7_8.patch || echo "SYSVIPC patch may already be applied"
+          if [ -f patches/001.GKI-below-6.12-fix_sysvipc_kABI_3_4_5.patch ]; then
+            patch -p1 < patches/001.GKI-below-6.12-fix_sysvipc_kABI_3_4_5.patch || echo "SYSVIPC patch may already be applied"
           fi
           if [ -f patches/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch ]; then
             patch -p1 < patches/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch || echo "POSIX_MQUEUE patch may already be applied"
@@ -95,7 +95,21 @@ jobs:
           DEFCONFIG=arch/arm64/configs/vendor/q2q_eur_openx_defconfig
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
-
+      
+      - name: Diagnose user_struct and sched.h
+        run: |
+          echo "===== include/linux/sched/user.h ====="
+          cat include/linux/sched/user.h
+          echo ""
+          echo "===== struct task_struct kABI reserve area ====="
+          grep -n "ANDROID_KABI_RESERVE\|ANDROID_KABI_USE\|ANDROID_OEM_DATA" include/linux/sched.h | head -30
+          echo ""
+          echo "===== Check ANDROID_KABI_USE macro definition ====="
+          grep -rn "define ANDROID_KABI_USE" include/linux/android_kabi.h
+          echo ""
+          echo "===== Check mq_bytes ====="
+          grep -n "mq_bytes" include/linux/sched/user.h || echo "mq_bytes NOT FOUND"
+          
       - name: Build kernel
         run: |
           set +e
