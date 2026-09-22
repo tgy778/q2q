@@ -52,17 +52,139 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/droidspaces
           mkdir -p patches
-          cp /tmp/droidspaces/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kABI_3_4_5.patch patches/ 2>/dev/null || true
+          cp /tmp/droidspaces/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kABI_6_7_8.patch patches/ 2>/dev/null || true
           cp /tmp/droidspaces/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch patches/ 2>/dev/null || true
 
-      - name: Apply Droidspaces kABI patches
+      - name: Apply Droidspaces kABI patches (manual, exact 手动补丁)
         run: |
-          if [ -f patches/001.GKI-below-6.12-fix_sysvipc_kABI_3_4_5.patch ]; then
-            patch -p1 < patches/001.GKI-below-6.12-fix_sysvipc_kABI_3_4_5.patch || echo "SYSVIPC patch may already be applied"
-          fi
-          if [ -f patches/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch ]; then
-            patch -p1 < patches/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch || echo "POSIX_MQUEUE patch may already be applied"
-          fi
+          python3 << 'PYEOF'
+          import re
+
+          # ============================================================
+          # 001: SYSVIPC - 修改 include/linux/sched.h
+          # ============================================================
+          print("===== Patching include/linux/sched.h for SYSVIPC =====")
+          path = "include/linux/sched.h"
+          with open(path) as f:
+              content = f.read()
+
+          if "ANDROID_KABI_USE(6, struct sysv_sem sysvsem)" in content:
+              print("SYSVIPC already fixed, skipping")
+          else:
+              # Step 1: 注释掉原有 sysvsem/sysvshm
+              content = re.sub(
+                  r'\tstruct sysv_sem\t+sysvsem;',
+                  '\t// struct sysv_sem\t\t\tsysvsem;',
+                  content
+              )
+              content = re.sub(
+                  r'\tstruct sysv_shm\t+sysvshm;',
+                  '\t// struct sysv_shm\t\t\tsysvshm;',
+                  content
+              )
+
+              # Step 2: 在 task_struct 末尾的 kABI 区域注入
+              # 精确匹配：RESERVE(6) 之前是 RESERVE(5)，之后是 RESERVE(6)(7)(8)
+              old = "\tANDROID_KABI_RESERVE(5);\n\tANDROID_KABI_RESERVE(6);\n\tANDROID_KABI_RESERVE(7);\n\tANDROID_KABI_RESERVE(8);"
+              new = """\tANDROID_KABI_RESERVE(5);
+          #ifdef CONFIG_SYSVIPC
+          	ANDROID_KABI_USE(6, struct sysv_sem sysvsem);
+          	_ANDROID_KABI_REPLACE(ANDROID_KABI_RESERVE(7); ANDROID_KABI_RESERVE(8), struct sysv_shm sysvshm);
+          #else
+          	ANDROID_KABI_RESERVE(6);
+          	ANDROID_KABI_RESERVE(7);
+          	ANDROID_KABI_RESERVE(8);
+          #endif"""
+
+              if old in content:
+                  content = content.replace(old, new, 1)
+                  print("SYSVIPC injection: OK")
+              else:
+                  print("ERROR: Could not find kABI reserve pattern in sched.h")
+                  # 打印诊断
+                  idx = content.find("ANDROID_KABI_RESERVE(5)")
+                  if idx > 0:
+                      print("Context:")
+                      print(repr(content[idx-50:idx+200]))
+
+              with open(path, "w") as f:
+                  f.write(content)
+
+          # Verify
+          with open(path) as f:
+              content = f.read()
+          print("SYSVIPC injected:", "ANDROID_KABI_USE(6, struct sysv_sem sysvsem)" in content)
+          print("sysvsem commented:", "// struct sysv_sem" in content)
+
+          # ============================================================
+          # 002: POSIX_MQUEUE - 修改 include/linux/sched/user.h
+          # ============================================================
+          print("\n===== Patching include/linux/sched/user.h for POSIX_MQUEUE =====")
+          path = "include/linux/sched/user.h"
+          with open(path) as f:
+              content = f.read()
+
+          if "ANDROID_KABI_USE(1, unsigned long mq_bytes)" in content:
+              print("POSIX_MQUEUE already fixed, skipping")
+          else:
+              # Step 1: 确保原 mq_bytes 已注释（可能已经注释过）
+              content = content.replace(
+                  "\tunsigned long mq_bytes;",
+                  "\t//unsigned long mq_bytes;"
+              )
+
+              # Step 2: 注入 kABI 字段
+              # 你的源码 user.h 末尾是：
+              #     ANDROID_KABI_RESERVE(1);
+              #     ANDROID_KABI_RESERVE(2);
+              # };
+              old = "\tANDROID_KABI_RESERVE(1);\n\tANDROID_KABI_RESERVE(2);\n};"
+              new = """#if defined(CONFIG_POSIX_MQUEUE)
+          	ANDROID_KABI_USE(1, unsigned long mq_bytes);
+          	ANDROID_KABI_RESERVE(2);
+          #else
+          	ANDROID_KABI_RESERVE(1);
+          	ANDROID_KABI_RESERVE(2);
+          #endif
+          };"""
+
+              if old in content:
+                  content = content.replace(old, new, 1)
+                  print("POSIX_MQUEUE injection: OK")
+              else:
+                  print("ERROR: Could not find kABI reserve pattern in user.h")
+                  idx = content.find("struct ratelimit_state ratelimit;")
+                  if idx > 0:
+                      print("Context:")
+                      print(repr(content[idx:idx+200]))
+
+              with open(path, "w") as f:
+                  f.write(content)
+
+          # Verify
+          with open(path) as f:
+              content = f.read()
+          print("mq_bytes active:", "ANDROID_KABI_USE(1, unsigned long mq_bytes)" in content)
+          print("mq_bytes commented:", "//unsigned long mq_bytes" in content)
+
+          # ============================================================
+          # Final summary
+          # ============================================================
+          print("\n===== Final verification =====")
+          with open("include/linux/sched.h") as f:
+              s = f.read()
+          with open("include/linux/sched/user.h") as f:
+              u = f.read()
+          print("sched.h SYSVIPC:", "ANDROID_KABI_USE(6, struct sysv_sem sysvsem)" in s)
+          print("user.h POSIX_MQUEUE:", "ANDROID_KABI_USE(1, unsigned long mq_bytes)" in u)
+          PYEOF
+
+          echo ""
+          echo "===== Grep verification ====="
+          echo "--- sched.h ---"
+          grep -n "sysvsem\|sysvshm\|ANDROID_KABI_USE" include/linux/sched.h | head -10
+          echo "--- user.h ---"
+          grep -n "mq_bytes\|ANDROID_KABI_USE" include/linux/sched/user.h
 
       - name: Add Droidspaces GKI config to defconfig
         run: |
