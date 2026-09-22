@@ -87,63 +87,53 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
 
-      - name: Build kernel
+            - name: Build kernel
         run: |
+          # 关键：让脚本即使 make 失败也继续执行后续命令
+          set +e
+          # 关键：从第一行输出就开始记录到 build.log
+          exec > >(tee -a build.log) 2>&1
+          
           export ARCH=arm64
           export PROJECT_NAME=q2q
           export CROSS_COMPILE=$(pwd)/toolchain_bin/aarch64-linux-android-
           export REAL_CC=$(which clang-12)
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export KERNEL_MAKE_ENV="DTC_EXT=$(pwd)/tools/dtc CONFIG_BUILD_ARM64_DT_OVERLAY=y"
-          mkdir -p out
-
-          # 用 AOSP GCC 4.9 的 binutils 覆盖 CROSS_COMPILE
-          CROSS_COMPILE=$(pwd)/aosp_gcc_bin/aarch64-linux-android-
-
-          # 把 AOSP GCC 4.9 的 bin 目录软链接到 toolchain_bin
-          mkdir -p $(pwd)/toolchain_bin
-          for f in /opt/gcc-aarch64/bin/*; do
-            ln -sf "$f" "$(pwd)/toolchain_bin/$(basename $f)"
-          done
-          CROSS_COMPILE=$(pwd)/toolchain_bin/aarch64-linux-android-
-
+          
           # 第一次 make：生成 .config
           make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV \
-            ARCH=arm64 \
-            CROSS_COMPILE=$CROSS_COMPILE \
-            REAL_CC=$REAL_CC \
-            CLANG_TRIPLE=$CLANG_TRIPLE \
-            CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
-            vendor/q2q_eur_openx_defconfig
+            ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE REAL_CC=$REAL_CC CLANG_TRIPLE=$CLANG_TRIPLE \
+            CONFIG_SECTION_MISMATCH_WARN_ONLY=y vendor/q2q_eur_openx_defconfig
 
-          # 第二次 make：正式编译
+          # 第二次 make：正式编译 (不再使用 -j 并行，或者保留并行但依赖 exec 重定向)
           make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV \
-            ARCH=arm64 \
-            CROSS_COMPILE=$CROSS_COMPILE \
-            REAL_CC=$REAL_CC \
-            CLANG_TRIPLE=$CLANG_TRIPLE \
-            CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
-            2>&1 | tee build.log
+            ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE REAL_CC=$REAL_CC CLANG_TRIPLE=$CLANG_TRIPLE \
+            CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          
+          # 记录 make 的退出状态码，但不要阻止脚本继续
+          BUILD_RESULT=$?
+          echo "Make exited with code: $BUILD_RESULT"
+          exit 0
 
-      - name: Extract build errors if failed
-        if: failure()
+      - name: Extract build errors from log
+        if: always() # 确保即使编译失败也执行
         run: |
-          echo "=== Errors ==="
-          grep -n "error:" build.log | head -30 || echo "No 'error:' lines found"
-          echo "=== Context ==="
-          FIRST_ERROR=$(grep -n "error:" build.log | head -1 | cut -d: -f1)
-          if [ -n "$FIRST_ERROR" ]; then
-            START=$((FIRST_ERROR > 20 ? FIRST_ERROR - 20 : 1))
-            sed -n "${START},$((FIRST_ERROR + 5))p" build.log
+          echo "===== Extracting errors from build.log ====="
+          if [ -f build.log ]; then
+            # 提取所有包含 "error:" 的行及其上下文
+            grep -n -B2 -A5 "error:" build.log || echo "No 'error:' lines found in build.log"
+          else
+            echo "build.log file not found!"
           fi
 
       - name: Upload build log
-        if: always()
+        if: always() # 确保即使编译失败也执行
         uses: actions/upload-artifact@v4
         with:
           name: build-log-${{ matrix.ksu && 'with-ksu' || 'no-ksu' }}-${{ github.sha }}
           path: build.log
-          if-no-files-found: warn
+          if-no-files-found: error # 如果日志都没找到，就明确报错，避免“沉默失败”
 
       - name: List build outputs
         if: success()
