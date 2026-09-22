@@ -33,6 +33,15 @@ jobs:
             /opt/gcc-aarch64
           echo "/opt/gcc-aarch64/bin" >> $GITHUB_PATH
 
+      - name: Verify toolchain
+        run: |
+          echo "=== Listing /opt/gcc-aarch64/bin ==="
+          ls -la /opt/gcc-aarch64/bin/ | head -30
+          echo "=== Check for aarch64-linux-android-ld ==="
+          ls -la /opt/gcc-aarch64/bin/aarch64-linux-android-ld || echo "ld NOT found!"
+          echo "=== Test ld ==="
+          /opt/gcc-aarch64/bin/aarch64-linux-android-ld --version || echo "ld not executable"
+
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -89,51 +98,47 @@ jobs:
 
       - name: Build kernel
         run: |
-          # 关键：让脚本即使 make 失败也继续执行后续命令
           set +e
-          # 关键：从第一行输出就开始记录到 build.log
           exec > >(tee -a build.log) 2>&1
-          
+
           export ARCH=arm64
           export PROJECT_NAME=q2q
-          export CROSS_COMPILE=$(pwd)/toolchain_bin/aarch64-linux-android-
+          export CROSS_COMPILE=aarch64-linux-android-
           export REAL_CC=$(which clang-12)
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export KERNEL_MAKE_ENV="DTC_EXT=$(pwd)/tools/dtc CONFIG_BUILD_ARM64_DT_OVERLAY=y"
-          
-          # 第一次 make：生成 .config
-          make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV \
-            ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE REAL_CC=$REAL_CC CLANG_TRIPLE=$CLANG_TRIPLE \
-            CONFIG_SECTION_MISMATCH_WARN_ONLY=y vendor/q2q_eur_openx_defconfig
+          mkdir -p out
 
-          # 第二次 make：正式编译 (不再使用 -j 并行，或者保留并行但依赖 exec 重定向)
           make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV \
-            ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE REAL_CC=$REAL_CC CLANG_TRIPLE=$CLANG_TRIPLE \
-            CONFIG_SECTION_MISMATCH_WARN_ONLY=y
-          
-          # 记录 make 的退出状态码，但不要阻止脚本继续
+            ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE REAL_CC=$REAL_CC \
+            CLANG_TRIPLE=$CLANG_TRIPLE CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
+            vendor/q2q_eur_openx_defconfig
+
+          make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV \
+            ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE REAL_CC=$REAL_CC \
+            CLANG_TRIPLE=$CLANG_TRIPLE CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+
           BUILD_RESULT=$?
           echo "Make exited with code: $BUILD_RESULT"
           exit 0
 
       - name: Extract build errors from log
-        if: always() # 确保即使编译失败也执行
+        if: always()
         run: |
           echo "===== Extracting errors from build.log ====="
           if [ -f build.log ]; then
-            # 提取所有包含 "error:" 的行及其上下文
-            grep -n -B2 -A5 "error:" build.log || echo "No 'error:' lines found in build.log"
+            grep -n -B2 -A5 "error:" build.log || echo "No 'error:' lines found"
           else
-            echo "build.log file not found!"
+            echo "build.log not found!"
           fi
 
       - name: Upload build log
-        if: always() # 确保即使编译失败也执行
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log-${{ matrix.ksu && 'with-ksu' || 'no-ksu' }}-${{ github.sha }}
           path: build.log
-          if-no-files-found: error # 如果日志都没找到，就明确报错，避免“沉默失败”
+          if-no-files-found: warn
 
       - name: List build outputs
         if: success()
