@@ -113,7 +113,14 @@ jobs:
             DTC_EXT=$(pwd)/tools/dtc \
             CONFIG_BUILD_ARM64_DT_OVERLAY=y \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            -j$(nproc) Image.gz dtb dtbo.img
+            -j$(nproc)
+
+      - name: Find and list build outputs
+        run: |
+          echo "=== Kernel images ==="
+          find out -name "Image*" -o -name "*.dtb" -o -name "dtbo.img" 2>/dev/null
+          echo "=== Looking for dtbo ==="
+          find out -name "*dtbo*" 2>/dev/null
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
@@ -121,6 +128,8 @@ jobs:
           name: q2q-kernel-${{ matrix.ksu && 'with-ksu' || 'no-ksu' }}-${{ github.sha }}
           path: |
             out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/Image
             out/arch/arm64/boot/dtb
             out/arch/arm64/boot/dtbo.img
+            out/arch/arm64/boot/*.dtb
           if-no-files-found: warn
