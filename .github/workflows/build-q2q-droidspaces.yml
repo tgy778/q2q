@@ -248,7 +248,43 @@ jobs:
               fi
             fi
           done
+      
+      - name: Diagnose kperfmon
+        run: |
+          echo "=== Kconfig ==="
+          cat drivers/kperfmon/Kconfig 2>/dev/null | head -20
+          echo ""
+          echo "=== Makefile ==="
+          cat drivers/kperfmon/Makefile 2>/dev/null
+          echo ""
+          echo "=== drivers/Makefile reference ==="
+          grep -n "kperfmon" drivers/Makefile
+          echo ""
+          echo "=== defconfig ==="
+          grep -i "perfmon" arch/arm64/configs/vendor/q2q_eur_openx_defconfig || echo "not found"
 
+      - name: Create proper perflog.h for kperfmon
+        run: |
+          for p in \
+            "../../../system/core/liblog/include/log" \
+            "../../../system/logging/liblog/include/log" \
+            "../../system/core/liblog/include/log" \
+            "../system/core/liblog/include/log"; do
+            mkdir -p "$p" 2>/dev/null
+            cat > "$p/perflog.h" << 'EOF'
+          #ifndef _LIBS_LOG_PERFLOG_H
+          #define _LIBS_LOG_PERFLOG_H
+          #include <linux/types.h>
+          #define PERFLOG_HEADER_SIZE 1
+          #define PERFLOG_BUFF_STR_MAX_SIZE 256
+          union _uPLogPacket {
+              u8 data[PERFLOG_HEADER_SIZE + PERFLOG_BUFF_STR_MAX_SIZE];
+          };
+          #endif
+          EOF
+          done
+          echo "perflog.h created in all candidate paths"
+          find . -name "perflog.h" -not -path "./out/*"
       - name: Build kernel
         run: |
           set +e
