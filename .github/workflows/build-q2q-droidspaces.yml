@@ -24,7 +24,7 @@ jobs:
             liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev \
             libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
             schedtool squashfs-tools xsltproc zip zlib1g-dev \
-            python3 python3-pip patch clang llvm lld
+            python3 python3-pip patch clang-12 llvm-12 lld-12
 
       - name: Download AOSP GCC toolchain
         run: |
@@ -87,56 +87,81 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
 
-      - name: Diagnose secgetspf
-        run: |
-          echo "=== Find secgetspf files ==="
-          find . -name "secgetspf*" -not -path "./out/*" || echo "Not found"
-          echo "=== Search references ==="
-          grep -rn "secgetspf" --include="Makefile*" --include="*.mk" . 2>/dev/null | head -20 || echo "No references"
-          
-      - name: Configure kernel
-        run: |
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CC="ccache clang"
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-android-
-
-          make -C $(pwd) O=$(pwd)/out \
-            DTC_EXT=$(pwd)/tools/dtc \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            vendor/q2q_eur_openx_defconfig
-
       - name: Build kernel
         run: |
           export ARCH=arm64
-          export SUBARCH=arm64
-          export CC="ccache clang"
+          export PROJECT_NAME=q2q
+          export CROSS_COMPILE=$(pwd)/toolchain_bin/aarch64-linux-android-
+          export REAL_CC=$(which clang-12)
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-android-
+          export KERNEL_MAKE_ENV="DTC_EXT=$(pwd)/tools/dtc CONFIG_BUILD_ARM64_DT_OVERLAY=y"
+          mkdir -p out
 
-          make -C $(pwd) O=$(pwd)/out \
-            DTC_EXT=$(pwd)/tools/dtc \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            -j$(nproc)
+          # 用 AOSP GCC 4.9 的 binutils 覆盖 CROSS_COMPILE
+          CROSS_COMPILE=$(pwd)/aosp_gcc_bin/aarch64-linux-android-
 
-      - name: Find and list build outputs
+          # 把 AOSP GCC 4.9 的 bin 目录软链接到 toolchain_bin
+          mkdir -p $(pwd)/toolchain_bin
+          for f in /opt/gcc-aarch64/bin/*; do
+            ln -sf "$f" "$(pwd)/toolchain_bin/$(basename $f)"
+          done
+          CROSS_COMPILE=$(pwd)/toolchain_bin/aarch64-linux-android-
+
+          # 第一次 make：生成 .config
+          make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV \
+            ARCH=arm64 \
+            CROSS_COMPILE=$CROSS_COMPILE \
+            REAL_CC=$REAL_CC \
+            CLANG_TRIPLE=$CLANG_TRIPLE \
+            CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
+            vendor/q2q_eur_openx_defconfig
+
+          # 第二次 make：正式编译
+          make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV \
+            ARCH=arm64 \
+            CROSS_COMPILE=$CROSS_COMPILE \
+            REAL_CC=$REAL_CC \
+            CLANG_TRIPLE=$CLANG_TRIPLE \
+            CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
+            2>&1 | tee build.log
+
+      - name: Extract build errors if failed
+        if: failure()
+        run: |
+          echo "=== Errors ==="
+          grep -n "error:" build.log | head -30 || echo "No 'error:' lines found"
+          echo "=== Context ==="
+          FIRST_ERROR=$(grep -n "error:" build.log | head -1 | cut -d: -f1)
+          if [ -n "$FIRST_ERROR" ]; then
+            START=$((FIRST_ERROR > 20 ? FIRST_ERROR - 20 : 1))
+            sed -n "${START},$((FIRST_ERROR + 5))p" build.log
+          fi
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.ksu && 'with-ksu' || 'no-ksu' }}-${{ github.sha }}
+          path: build.log
+          if-no-files-found: warn
+
+      - name: List build outputs
+        if: success()
         run: |
           echo "=== Kernel images ==="
-          find out -name "Image*" -o -name "*.dtb" -o -name "dtbo.img" 2>/dev/null
-          echo "=== Looking for dtbo ==="
-          find out -name "*dtbo*" 2>/dev/null
+          find out -name "Image*" -o -name "dtbo.img" 2>/dev/null
+          echo "=== DTB files ==="
+          find out -name "*.dtb" 2>/dev/null | head -20
 
       - name: Upload kernel artifacts
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: q2q-kernel-${{ matrix.ksu && 'with-ksu' || 'no-ksu' }}-${{ github.sha }}
           path: |
             out/arch/arm64/boot/Image.gz
             out/arch/arm64/boot/Image
-            out/arch/arm64/boot/dtb
             out/arch/arm64/boot/dtbo.img
+            out/arch/arm64/boot/dtb
             out/arch/arm64/boot/*.dtb
           if-no-files-found: warn
