@@ -24,8 +24,14 @@ jobs:
             liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev \
             libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
             schedtool squashfs-tools xsltproc zip zlib1g-dev \
-            python3 python3-pip patch \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            python3 python3-pip patch clang llvm lld
+
+      - name: Download AOSP GCC toolchain
+        run: |
+          git clone --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 \
+            /opt/gcc-aarch64
+          echo "/opt/gcc-aarch64/bin" >> $GITHUB_PATH
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -51,7 +57,6 @@ jobs:
 
       - name: Add Droidspaces GKI config to defconfig
         run: |
-          # 请将 q2q_defconfig 替换为你实际的 defconfig 文件名(这里是 vendor/q2q_eur_openx_defconfig)
           DEFCONFIG=arch/arm64/configs/vendor/q2q_eur_openx_defconfig
           cat >> $DEFCONFIG << 'EOF'
 
@@ -82,17 +87,33 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
 
-      - name: Configure and build kernel
+      - name: Configure kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
           export CC="ccache clang"
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-android-
 
-          # 请将 q2q_defconfig 替换为实际文件名(这里是 vendor/q2q_eur_openx_defconfig)
-          make O=out vendor/q2q_eur_openx_defconfig
-          make O=out -j$(nproc) Image.gz dtb dtbo.img
+          make -C $(pwd) O=$(pwd)/out \
+            DTC_EXT=$(pwd)/tools/dtc \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            vendor/q2q_eur_openx_defconfig
+
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC="ccache clang"
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-android-
+
+          make -C $(pwd) O=$(pwd)/out \
+            DTC_EXT=$(pwd)/tools/dtc \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            -j$(nproc) Image.gz dtb dtbo.img
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
