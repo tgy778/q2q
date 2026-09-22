@@ -89,8 +89,8 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          # 请将 q2q_defconfig 替换为实际文件名
-          make O=out q2q_defconfig
+          # 请将 q2q_defconfig 替换为实际文件名(这里是 vendor/q2q_eur_openx_defconfig)
+          make O=out vendor/q2q_eur_openx_defconfig
           make O=out -j$(nproc) Image.gz dtb dtbo.img
 
       - name: Upload kernel artifacts
