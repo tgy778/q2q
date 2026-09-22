@@ -87,7 +87,7 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
 
-            - name: Build kernel
+      - name: Build kernel
         run: |
           # 关键：让脚本即使 make 失败也继续执行后续命令
           set +e
